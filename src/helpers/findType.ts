@@ -6,7 +6,6 @@ import {
   type TypeValueThunk,
 } from "@/decorators/types";
 import { NoExplicitTypeError } from "@/errors";
-import { ensureReflectMetadataExists } from "@/metadata/utils";
 import { bannedTypes } from "./returnTypes";
 
 export type MetadataKey = "design:type" | "design:returntype" | "design:paramtypes";
@@ -46,24 +45,6 @@ export function findType({
   typeOptions = {},
 }: GetTypeParams): TypeInfo {
   const options: TypeOptions = { ...typeOptions };
-  let metadataDesignType: Function | undefined;
-  ensureReflectMetadataExists();
-  const reflectedType: Function[] | Function | undefined = Reflect.getMetadata(
-    metadataKey,
-    prototype,
-    propertyKey,
-  );
-  if (reflectedType) {
-    if (metadataKey === "design:paramtypes") {
-      metadataDesignType = (reflectedType as Function[])[parameterIndex!];
-    } else {
-      metadataDesignType = reflectedType as Function;
-    }
-  }
-
-  if (!returnTypeFunc && (!metadataDesignType || bannedTypes.includes(metadataDesignType))) {
-    throw new NoExplicitTypeError(prototype.constructor.name, propertyKey, parameterIndex, argName);
-  }
 
   if (returnTypeFunc) {
     const getType = () => {
@@ -81,11 +62,29 @@ export function findType({
       typeOptions: options,
     };
   }
-  if (metadataDesignType) {
-    return {
-      getType: () => metadataDesignType!,
-      typeOptions: options,
-    };
+
+  let metadataDesignType: Function | undefined;
+  if (typeof Reflect === "object" && typeof Reflect.getMetadata === "function") {
+    const reflectedType: Function[] | Function | undefined = Reflect.getMetadata(
+      metadataKey,
+      prototype,
+      propertyKey,
+    );
+    if (reflectedType) {
+      if (metadataKey === "design:paramtypes") {
+        metadataDesignType = (reflectedType as Function[])[parameterIndex!];
+      } else {
+        metadataDesignType = reflectedType as Function;
+      }
+    }
   }
-  throw new Error("Ops... this should never happen :)");
+
+  if (!metadataDesignType || bannedTypes.includes(metadataDesignType)) {
+    throw new NoExplicitTypeError(prototype.constructor.name, propertyKey, parameterIndex, argName);
+  }
+
+  return {
+    getType: () => metadataDesignType!,
+    typeOptions: options,
+  };
 }
