@@ -33,6 +33,7 @@ import { convertTypeIfScalar, getEnumValuesMap, wrapWithTypeOptions } from "@/he
 import {
   type ClassMetadata,
   type FieldMetadata,
+  type FieldResolverMetadata,
   type ParamMetadata,
   type ResolverMetadata,
   type SubscriptionResolverMetadata,
@@ -121,6 +122,8 @@ export abstract class SchemaGenerator {
 
   private static usedInterfaceTypes = new Set<Function>();
 
+  private static fieldResolversLookup = new Map<Function, Map<string, FieldResolverMetadata>>();
+
   private static metadataStorage: MetadataStorage;
 
   static generateFromMetadata(options: SchemaGeneratorOptions): GraphQLSchema {
@@ -195,6 +198,23 @@ export abstract class SchemaGenerator {
   }
 
   private static buildTypesInfo(resolvers: Function[]) {
+    // precompute a lookup for field resolvers metadata to avoid an
+    // O(fields x fieldResolvers) filter+find per schema field
+    const resolversSet = new Set(resolvers);
+    this.fieldResolversLookup = new Map();
+    for (const it of this.metadataStorage.fieldResolvers) {
+      if (it.kind === "internal" || resolversSet.has(it.target)) {
+        const objectType = it.getObjectType!();
+        let byMethodName = this.fieldResolversLookup.get(objectType);
+        if (byMethodName === undefined) {
+          byMethodName = new Map();
+          this.fieldResolversLookup.set(objectType, byMethodName);
+        }
+        if (!byMethodName.has(it.methodName)) {
+          byMethodName.set(it.methodName, it);
+        }
+      }
+    }
     this.unionTypesInfo = this.metadataStorage.unions.map<UnionTypeInfo>(unionMetadata => {
       // use closure to capture values from this selected schema build
       const unionObjectTypesInfo: ObjectTypeInfo[] = [];
@@ -318,13 +338,9 @@ export abstract class SchemaGenerator {
 
             let fields = fieldsMetadata.reduce<GraphQLFieldConfigMap<any, any>>(
               (fieldsMap, field) => {
-                const { fieldResolvers } = this.metadataStorage;
-                const filteredFieldResolversMetadata = fieldResolvers.filter(
-                  it => it.kind === "internal" || resolvers.includes(it.target),
-                );
-                const fieldResolverMetadata = filteredFieldResolversMetadata.find(
-                  it => it.getObjectType!() === field.target && it.methodName === field.name,
-                );
+                const fieldResolverMetadata = this.fieldResolversLookup
+                  .get(field.target)
+                  ?.get(field.name);
                 const type = this.getGraphQLOutputType(
                   field.target,
                   field.name,
